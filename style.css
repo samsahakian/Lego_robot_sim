@@ -1,0 +1,94 @@
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: #f4f6fb;
+  color: #1c2333;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: #1f3a8a;
+  color: #fff;
+}
+header h1 { margin: 0; font-size: 1.3rem; }
+header select {
+  font-size: 1rem;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: none;
+  margin-left: 6px;
+}
+
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px;
+}
+
+#blocklyDiv {
+  width: 100%;
+  height: calc(100vh - 84px);
+  min-height: 420px;
+  border-radius: 12px;
+  border: 2px solid #c9d2ea;
+  background: #fff;
+}
+
+#sim { display: flex; flex-direction: column; gap: 10px; }
+
+#mat {
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  border: 2px solid #c9d2ea;
+  background: #fff;
+}
+
+#controls { display: flex; flex-wrap: wrap; gap: 8px; }
+
+button {
+  font-size: 1.05rem;
+  padding: 12px 18px;
+  border-radius: 10px;
+  border: 2px solid #c9d2ea;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 600;
+}
+button:hover { background: #eef2ff; }
+button.primary { background: #2e7d32; border-color: #2e7d32; color: #fff; }
+button.primary:hover { background: #276b2b; }
+button.danger { background: #c62828; border-color: #c62828; color: #fff; }
+button.danger:hover { background: #a82121; }
+
+#hint {
+  margin: 0;
+  padding: 10px 12px;
+  background: #fff8e1;
+  border-radius: 10px;
+  border: 1px solid #ffe08a;
+}
+
+#status {
+  margin: 0;
+  min-height: 2.6em;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+#status.ok   { background: #e8f5e9; color: #1b5e20; }
+#status.warn { background: #fff3e0; color: #e65100; }
+#status.info { background: #e3f2fd; color: #0d47a1; }
+
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; }
+  #blocklyDiv { height: 55vh; min-height: 340px; }
+}
