@@ -9,9 +9,12 @@
 <body>
   <header>
     <h1>🤖 Robot Practice</h1>
-    <label>Challenge:
-      <select id="level"></select>
-    </label>
+    <div class="hdr-right">
+      <label class="hard"><input type="checkbox" id="hard"> Hard mode (hide wiring)</label>
+      <label>Challenge:
+        <select id="level"></select>
+      </label>
+    </div>
   </header>
 
   <main>
@@ -27,6 +30,10 @@
         <button id="reset">↺ Reset robot</button>
         <button id="clear">🗑 Clear blocks</button>
       </div>
+      <details id="wiring" open>
+        <summary>🔌 Robot wiring (what's plugged in where)</summary>
+        <table id="ports"></table>
+      </details>
       <p id="hint"></p>
       <p id="status" aria-live="polite"></p>
     </section>

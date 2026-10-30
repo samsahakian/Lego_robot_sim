@@ -18,6 +18,10 @@ then open http://localhost:8000.
 
 Edit the `LEVELS` array at the top of `app.js`. Each level has a start pose, `obstacles`, colored `lines`, `targets`, and a `check` function. Distances are in cm on a 236 x 114 cm mat.
 
+## How the robot is wired
+
+The simulated robot has its left wheel motor on port A, right wheel motor on port E, arm motor on port C (clockwise lowers it) and the color sensor on port F. Programs must start with "set movement motors" using the right ports, like on the real brick. Kids can tick **Hard mode** to hide the wiring panel. Edit `WIRING` in `app.js` to change the layout.
+
 ## Notes
 
 - The mat is a generic practice field, not the official season mat. Tune `BASE_SPEED`, `BASE_TURN`, and the robot size in `app.js` to match your team's robot.
