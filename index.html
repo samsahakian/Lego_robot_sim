@@ -9,9 +9,12 @@
 <body>
   <header>
     <h1>🤖 Robot Practice</h1>
-    <label>Challenge:
-      <select id="level"></select>
-    </label>
+    <div class="hdr-right">
+      <label class="hard"><input type="checkbox" id="hard"> Hard mode (hide wiring)</label>
+      <label>Challenge:
+        <select id="level"></select>
+      </label>
+    </div>
   </header>
 
   <main>
@@ -21,12 +24,22 @@
 
     <section id="sim">
       <canvas id="mat"></canvas>
+      <p class="tip">✋ Drag the robot to move it (even to the other base) · drag the orange dot to aim it · click the hub buttons on the robot (or below)</p>
       <div id="controls">
         <button id="run" class="primary">▶ Run</button>
         <button id="stop" class="danger">■ Stop</button>
         <button id="reset">↺ Reset robot</button>
         <button id="clear">🗑 Clear blocks</button>
       </div>
+      <div id="hub">
+        <span>🧱 Hub buttons:</span>
+        <button id="btnL" class="hubbtn">◀ Left</button>
+        <button id="btnR" class="hubbtn">Right ▶</button>
+      </div>
+      <details id="wiring" open>
+        <summary>🔌 Robot wiring (what's plugged in where)</summary>
+        <table id="ports"></table>
+      </details>
       <p id="hint"></p>
       <p id="status" aria-live="polite"></p>
     </section>
