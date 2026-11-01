@@ -95,6 +95,39 @@
       lines: [],
       targets: [{ x: 150, y: 60, r: 10, label: '📦' }],
       check: s => s.visited.has(0) && s.armDeg >= ARM_MAX_DEG - 5 && s.inBase()
+    },
+    {
+      // Based on Mission 01 of the 2026-27 BIOGLOW season. Positions are approximate.
+      name: 'Mission 1: Drone Survey',
+      hint: 'Push the red Scan Marker to raise the drone off the mat (20 pts). Push it all the way under the LiDAR map and into the survey area to flip the map (+10 bonus). Finish with the robot backed away from the model! (Layout is approximate, not the official mat.)',
+      start: { x: 22, y: 95, h: 0 },
+      obstacles: [{ x: 104, y: 22, w: 18, h: 16 }],        // the drone's base
+      lines: [],
+      targets: [],
+      pushables: [{ id: 'marker', x: 76, y: 66, w: 8, h: 8, color: '#e53935', label: 'SCAN' }],
+      lidarMap: { x: 66, y: 40, w: 28, h: 18 },
+      zones: [{ x: 66, y: 18, w: 28, h: 20, label: 'SURVEY AREA' }],
+      drone: { x: 113, y: 30 },
+      update(s) {
+        const m = s.objects[0];
+        if (Math.hypot(m.x - m.x0, m.y - m.y0) >= 8) s.mission.launched = true;
+        if (rectsOverlap(m, this.lidarMap)) s.mission.flipped = true;
+      },
+      check: s => s.mission.launched && !touchingMarker(),
+      scoreText(s) {
+        const m = s.objects[0];
+        const inSurvey = rectsOverlap(m, this.zones[0]);
+        const bonus = s.mission.launched && s.mission.flipped && inSurvey;
+        const pts = (s.mission.launched ? 20 : 0) + (bonus ? 10 : 0);
+        if (s.mission.launched && touchingMarker()) {
+          return { kind: 'warn', text: 'Back up! The robot is still touching the model, so no points count yet. Add a small back-off move to the end of your program.' };
+        }
+        if (!s.mission.launched) {
+          return { kind: 'warn', text: '0/30 points. The drone is still on the mat. Push the red Scan Marker farther.' };
+        }
+        if (bonus) return { kind: 'ok', text: '🎉 30/30 points! Drone launched (+20) and the LiDAR map flipped with the marker in the survey area (+10).' };
+        return { kind: 'info', text: pts + '/30 points: drone launched (+20). For +10 more, push the marker under the LiDAR map and into the survey area.' };
+      }
     }
   ];
 
@@ -303,6 +336,8 @@
     x: 0, y: 0, h: 0, armDeg: 0,
     speed: 75, motorSpeed: {}, moveMotors: null, swapped: false,
     cont: null, pendingBump: false, flash: null,
+    bumped: false, contactUntil: 0, jitterSide: 0,
+    objects: [], mission: { launched: false, flipped: false },
     trail: [], visited: new Set(), running: false,
     inBase() { return !!inBaseNow(); },
     inTarget(i) {
@@ -331,6 +366,9 @@
     sim.swapped = false;
     sim.cont = null;
     sim.pendingBump = false;
+    sim.bumped = false;
+    sim.objects = (level.pushables || []).map(p => Object.assign({ x0: p.x, y0: p.y }, p));
+    sim.mission = { launched: false, flipped: false };
     sim.trail = [[sim.x, sim.y]];
     sim.visited = new Set();
   }
@@ -379,6 +417,48 @@
     return false;
   }
 
+  function rectsOverlap(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+  // does the robot (at x, y, heading h) overlap a pushable object?
+  function overlapsRobot(p, x, y, h, pad) {
+    const g = pad || 0, r = h * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+    for (let i = 0; i <= 4; i++) {
+      for (let j = 0; j <= 4; j++) {
+        const px = p.x + p.w * i / 4, py = p.y + p.h * j / 4;
+        const dx = px - x, dy = py - y;
+        if (Math.abs(dx * c + dy * s) <= HL + g && Math.abs(-dx * s + dy * c) <= HW + g) return true;
+      }
+    }
+    return false;
+  }
+  function touchingMarker() {
+    return sim.objects.some(o => overlapsRobot(o, sim.x, sim.y, sim.h, 0.5));
+  }
+  function objectFits(p, nx, ny) {
+    if (nx < 0 || ny < 0 || nx + p.w > W || ny + p.h > H) return false;
+    const r = { x: nx, y: ny, w: p.w, h: p.h };
+    return !level.obstacles.some(o => rectsOverlap(r, o));
+  }
+  // moves the robot if nothing is in the way; anything it shoves ahead of it moves too
+  function tryMove(nx, ny, nh) {
+    if (blocked(nx, ny, nh)) return false;
+    const ddx = nx - sim.x, ddy = ny - sim.y;
+    const pushes = [];
+    for (const p of sim.objects) {
+      if (!overlapsRobot(p, nx, ny, nh)) continue;
+      const toward = ddx * (p.x + p.w / 2 - sim.x) + ddy * (p.y + p.h / 2 - sim.y);
+      if (toward <= 0) continue;              // moving away from it: leave it alone
+      if (!objectFits(p, p.x + ddx, p.y + ddy)) return false;
+      pushes.push(p);
+    }
+    pushes.forEach(p => { p.x += ddx; p.y += ddy; });
+    sim.x = nx;
+    sim.y = ny;
+    sim.h = nh;
+    return true;
+  }
+
   function baseCorner(side) { return [side === 'L' ? 0 : W, H]; }
   function inBaseRegion(p, side) {
     const c = baseCorner(side);
@@ -425,6 +505,7 @@
   }
 
   function afterMove() {
+    if (level.update) level.update(sim);
     sim.trail.push([sim.x, sim.y]);
     level.targets.forEach((t, i) => {
       if (Math.hypot(sim.x - t.x, sim.y - t.y) <= t.r) sim.visited.add(i);
@@ -432,15 +513,60 @@
   }
 
   // drive the robot forward along its heading by a signed distance
+  // Like a real robot, it never just stops when it hits something: the wheels keep pushing,
+  // so it scrapes along the obstacle, gets dragged around to line up with it, and stutters
+  // off to one side when it is pushing straight into it.
   function stepForward(d) {
     const r = sim.h * Math.PI / 180;
-    const nx = sim.x + d * Math.cos(r);
-    const ny = sim.y + d * Math.sin(r);
-    if (blocked(nx, ny, sim.h)) return false;
-    sim.x = nx;
-    sim.y = ny;
-    afterMove();
-    return true;
+    const dx = d * Math.cos(r), dy = d * Math.sin(r);
+    if (tryMove(sim.x + dx, sim.y + dy, sim.h)) {
+      sim.jitterSide = 0;
+      afterMove();
+      return true;
+    }
+    sim.bumped = true;
+    sim.contactUntil = Date.now() + 300;
+    if (!sim.jitterSide) sim.jitterSide = Math.random() < 0.5 ? 1 : -1;
+    const f = 0.5; // wheels slip against the obstacle, so progress is slower
+
+    // 1. slide along the obstacle
+    const slides = [[dx * f, 0], [0, dy * f]]
+      .filter(([sx, sy]) => Math.abs(sx) + Math.abs(sy) > 1e-4)
+      .sort((p, q) => (Math.abs(q[0]) + Math.abs(q[1])) - (Math.abs(p[0]) + Math.abs(p[1])));
+    for (const [sx, sy] of slides) {
+      if (!tryMove(sim.x + sx, sim.y + sy, sim.h)) continue;
+      const moveAng = Math.atan2(sy, sx) * 180 / Math.PI;
+      const target = d >= 0 ? moveAng : moveAng + 180;
+      const nud = Math.max(-3, Math.min(3, normHeading(target - sim.h)));
+      if (!blocked(sim.x, sim.y, sim.h + nud)) sim.h += nud;
+      afterMove();
+      return true;
+    }
+    // 2. pushing straight in: it wiggles off to one side
+    for (const k of [2, 4, 6]) {
+      const nh = sim.h + sim.jitterSide * k;
+      if (tryMove(sim.x + dx * 0.4, sim.y + dy * 0.4, nh)) {
+        afterMove();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // turning against a wall: the wall shoves the robot aside a little so it can swing round
+  function rotateTo(nh) {
+    if (!blocked(sim.x, sim.y, nh)) { sim.h = nh; return true; }
+    sim.bumped = true;
+    sim.contactUntil = Date.now() + 300;
+    for (const [ox, oy] of [[0.6, 0], [-0.6, 0], [0, 0.6], [0, -0.6]]) {
+      if (!blocked(sim.x + ox, sim.y + oy, nh)) {
+        sim.x += ox;
+        sim.y += oy;
+        sim.h = nh;
+        return true;
+      }
+    }
+    return false;
   }
 
   // ---------- Timing helpers ----------
@@ -452,7 +578,7 @@
       // "start moving" keeps the robot driving while later blocks run
       if (sim.cont) {
         const d = sim.cont.dir * BASE_SPEED * sim.speed / 100 * dt;
-        if (!stepForward(d)) { sim.cont = null; sim.pendingBump = true; }
+        stepForward(d);
       }
       resolve(dt);
     }));
@@ -506,7 +632,7 @@
       while (left > 0) {
         checkStop();
         const dt = Math.min(await tick(), left);
-        if (!stepForward(sign * speed() * dt)) throw BUMP;
+        stepForward(sign * speed() * dt);
         left -= dt;
       }
       return;
@@ -516,7 +642,7 @@
       checkStop();
       const dt = await tick();
       const d = Math.min(rem, speed() * dt);
-      if (!stepForward(sign * d)) throw BUMP;
+      stepForward(sign * d); // wheels count the full distance even if the robot is held up
       rem -= d;
     }
   }
@@ -527,14 +653,20 @@
     const dir = sign * (sim.swapped ? -1 : 1);
     const rate = () => BASE_TURN * sim.speed / 100;
     let rem = unit === 'sec' ? val : unit === 'rot' ? val * 360 : val;
+    let stuck = 0;
     while (rem > 0) {
       checkStop();
       const dt = await tick();
       const d = unit === 'sec' ? Math.min(dt, rem) : Math.min(rem, rate() * dt);
       const turned = unit === 'sec' ? rate() * d : d;
       const nh = sim.h + dir * turned;
-      if (blocked(sim.x, sim.y, nh)) throw BUMP;
-      sim.h = nh;
+      if (!rotateTo(nh) && unit !== 'sec') {
+        // the gyro never sees the turn finish, so a real program would hang here too
+        stuck += dt;
+        if (stuck > 3) fail('The robot is stuck against something and can\'t finish turning. Try backing up or aiming differently first.');
+        continue;
+      }
+      stuck = 0;
       rem -= d;
     }
   }
@@ -564,10 +696,15 @@
     }
     if (sensorColor() === color) return;
     if (!sim.cont) fail('The robot isn\'t moving, so it would wait forever. Use "start moving" before waiting for a color.');
+    let stuckT = 0, lx = sim.x, ly = sim.y;
     for (;;) {
       checkStop();
-      await tick();
+      const dt = await tick();
       if (sensorColor() === color) return;
+      if (Math.hypot(sim.x - lx, sim.y - ly) < 0.01) stuckT += dt; else stuckT = 0;
+      lx = sim.x;
+      ly = sim.y;
+      if (stuckT > 3) fail('The robot is stuck pushing against something and never saw ' + color + '.');
       if (!sim.cont && !sim.pendingBump) fail('The robot stopped before it ever saw ' + color + '.');
     }
   }
@@ -670,6 +807,7 @@
     if (fresh) resetSim();
     else { sim.trail = [[sim.x, sim.y]]; sim.cont = null; sim.pendingBump = false; }
     programAlive = true;
+    sim.bumped = false;
     stopFlag = false;
     sim.running = true;
     lastT = null;
@@ -694,11 +832,16 @@
       setStatus('⚠ ' + failure.msg, 'warn');
       return;
     }
-    const bumpMsg = outcome === 'bump' ? 'Bump! The robot hit something and stopped. ' : '';
+    const bumpMsg = sim.bumped ? 'The robot bumped into something along the way. ' : '';
     const waiting = hasButtonHats() ? ' Press the left ◀ or right ▶ button to run those blocks.' : '';
+    if (level.scoreText) {
+      const r = level.scoreText(sim);
+      setStatus(bumpMsg + r.text + waiting, r.kind);
+      return;
+    }
     if (level.check && level.check(sim)) setStatus('🎉 Challenge complete! Try the next one.', 'ok');
     else if (level.check) setStatus(bumpMsg + 'Not quite yet.' + (waiting || ' Check your numbers and try again!'), 'warn');
-    else setStatus(bumpMsg + 'Program finished.' + waiting, outcome === 'bump' ? 'warn' : 'info');
+    else setStatus(bumpMsg + 'Program finished.' + waiting, sim.bumped ? 'warn' : 'info');
   }
 
   // the center "start" button: (re)starts the program
@@ -833,8 +976,13 @@
         if (fit) placeRobot(fit.x, fit.y, h);
       }
     } else {
-      const fit = fitInBase(p.x + drag.dx, p.y + drag.dy, sim.h);
-      if (fit) placeRobot(fit.x, fit.y, sim.h);
+      // carry the robot anywhere over the mat; it snaps into a base when let go
+      sim.x = Math.max(0, Math.min(W, p.x + drag.dx));
+      sim.y = Math.max(0, Math.min(H, p.y + drag.dy));
+      sim.trail = [[sim.x, sim.y]];
+      sim.visited = new Set();
+      sim.cont = null;
+      sim.pendingBump = false;
     }
   });
 
@@ -846,6 +994,11 @@
     if (d.mode === 'button') {
       if (e && e.type === 'pointerup' && hitButton(pointerCm(e)) === d.which) pressButton(d.which);
       return;
+    }
+    if (d.mode === 'move') {
+      const fit = fitInBase(sim.x, sim.y, sim.h);
+      if (fit) placeRobot(fit.x, fit.y, sim.h);
+      else placeRobot(startPose.x, startPose.y, startPose.h);
     }
     const side = inBaseNow();
     const deg = Math.round((sim.h % 360 + 360) % 360);
@@ -868,7 +1021,9 @@
     ctx.stroke();
 
     // the two quarter-circle bases
-    const inside = inBaseNow();
+    const carrying = !!drag && drag.mode === 'move';
+    const landing = carrying ? (fitInBase(sim.x, sim.y, sim.h) || {}).side : null;
+    const inside = carrying ? landing : inBaseNow();
     ['L', 'R'].forEach(side => {
       const cx = (side === 'L' ? 0 : W) * S, cy = H * S;
       const a0 = side === 'L' ? -Math.PI / 2 : Math.PI;
@@ -906,6 +1061,68 @@
       ctx.strokeRect(o.x * S, o.y * S, o.w * S, o.h * S);
     });
 
+    // mission models: survey area, LiDAR map, scan marker, drone
+    (level.zones || []).forEach(z => {
+      ctx.strokeStyle = '#2e7d32';
+      ctx.setLineDash([8, 6]);
+      ctx.lineWidth = 2;
+      ctx.strokeRect(z.x * S, z.y * S, z.w * S, z.h * S);
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#2e7d32';
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(z.label, (z.x + z.w / 2) * S, (z.y + 5) * S);
+      ctx.textAlign = 'start';
+    });
+    if (level.lidarMap) {
+      const m = level.lidarMap, flipped = sim.mission.flipped;
+      ctx.fillStyle = flipped ? '#bbdefb' : '#cfd8dc';
+      ctx.fillRect(m.x * S, m.y * S, m.w * S, m.h * S);
+      ctx.strokeStyle = flipped ? '#1565c0' : '#607d8b';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(m.x * S, m.y * S, m.w * S, m.h * S);
+      ctx.fillStyle = flipped ? '#0d47a1' : '#37474f';
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(flipped ? 'MAP FLIPPED ✓' : 'LiDAR MAP', (m.x + m.w / 2) * S, (m.y + m.h - 4) * S);
+      ctx.textAlign = 'start';
+    }
+    if (level.drone) {
+      const up = sim.mission.launched;
+      const dx = (level.drone.x + (up ? 6 : 0)) * S, dy = (level.drone.y - (up ? 14 : 0)) * S;
+      ctx.globalAlpha = up ? 0.65 : 1;
+      ctx.fillStyle = '#37474f';
+      ctx.fillRect(dx - 6 * S, dy - 1.5 * S, 12 * S, 3 * S);
+      ctx.fillRect(dx - 1.5 * S, dy - 6 * S, 3 * S, 12 * S);
+      [[-6, -6], [6, -6], [-6, 6], [6, 6]].forEach(([ox, oy]) => {
+        ctx.beginPath();
+        ctx.arc(dx + ox * S * 0.7, dy + oy * S * 0.7, 3 * S, 0, Math.PI * 2);
+        ctx.fillStyle = '#90a4ae';
+        ctx.fill();
+        ctx.strokeStyle = '#37474f';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      });
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = up ? '#2e7d32' : '#37474f';
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(up ? 'DRONE LAUNCHED ✓' : 'DRONE', dx, dy + 12 * S);
+      ctx.textAlign = 'start';
+    }
+    sim.objects.forEach(o => {
+      ctx.fillStyle = o.color;
+      ctx.fillRect(o.x * S, o.y * S, o.w * S, o.h * S);
+      ctx.strokeStyle = '#7f1d1d';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(o.x * S, o.y * S, o.w * S, o.h * S);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 10px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(o.label, (o.x + o.w / 2) * S, (o.y + o.h / 2) * S + 3);
+      ctx.textAlign = 'start';
+    });
+
     // targets
     level.targets.forEach((t, i) => {
       const done = sim.visited.has(i);
@@ -934,7 +1151,9 @@
       ctx.stroke();
     }
 
+    if (carrying) ctx.globalAlpha = 0.7;
     drawRobot();
+    ctx.globalAlpha = 1;
     drawAimHandle();
 
     // border
@@ -953,9 +1172,9 @@
     ctx.fillStyle = '#ef6c00';
     ctx.fillRect(HL * S - 2, -3 * S, armLen * S, 6 * S);
 
-    // body: large white rectangle
+    // body: large white rectangle (outline flashes red while it is pushing against something)
     ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#1c2333';
+    ctx.strokeStyle = Date.now() < sim.contactUntil ? '#e53935' : '#1c2333';
     ctx.lineWidth = 3;
     ctx.fillRect(-HL * S, -BODY_HW * S, 2 * HL * S, 2 * BODY_HW * S);
     ctx.strokeRect(-HL * S, -BODY_HW * S, 2 * HL * S, 2 * BODY_HW * S);
