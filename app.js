@@ -97,36 +97,32 @@
       check: s => s.visited.has(0) && s.armDeg >= ARM_MAX_DEG - 5 && s.inBase()
     },
     {
-      // Based on Mission 01 of the 2026-27 BIOGLOW season. Positions are approximate.
+      // Mission 01 of the 2026-27 BIOGLOW season. Positions follow the measurements used by the open-source
+      // fll-practice simulator (mat coordinates converted to our 236 x 114 table); heights/angles are scaled the same way.
       name: 'Mission 1: Drone Survey',
-      hint: 'Push the red Scan Marker to raise the drone off the mat (20 pts). Push it all the way under the LiDAR map and into the survey area to flip the map (+10 bonus). Finish with the robot backed away from the model! (Layout is approximate, not the official mat.)',
+      hint: 'The drone lies on its strings along the bottom edge, between the two bases. The pilot stand has a red lever: push it toward the right and the drone lifts off the mat (20 pts). Then back the robot away so it is not touching the model when the program ends. (Layout is approximate, not the official mat.)',
       start: { x: 22, y: 95, h: 0 },
-      obstacles: [{ x: 104, y: 22, w: 18, h: 16 }],        // the drone's base
+      obstacles: [{ x: 111, y: 108, w: 9, h: 6, label: 'PILOT STAND' }],
       lines: [],
       targets: [],
-      pushables: [{ id: 'marker', x: 76, y: 66, w: 8, h: 8, color: '#e53935', label: 'SCAN' }],
-      lidarMap: { x: 66, y: 40, w: 28, h: 18 },
-      zones: [{ x: 66, y: 18, w: 28, h: 20, label: 'SURVEY AREA' }],
-      drone: { x: 113, y: 30 },
+      pushables: [{ id: 'lever', x: 116.5, y: 95, w: 6, h: 10, color: '#e53935', label: '▶', slide: { axis: 'x', min: 116.5, max: 130.5 } }],
+      droneRig: { x1: 78, x2: 134, y: 95.3, depth: 6, drone: { x: 106.1, y: 95.3 }, travelMax: 14, maxAngle: 55, maxHeight: 10 },
       update(s) {
-        const m = s.objects[0];
-        if (Math.hypot(m.x - m.x0, m.y - m.y0) >= 8) s.mission.launched = true;
-        if (rectsOverlap(m, this.lidarMap)) s.mission.flipped = true;
+        const lv = s.objects[0], rig = this.droneRig;
+        s.mission.raise = Math.max(0, Math.min(1, (lv.x - lv.x0) / rig.travelMax));
+        s.mission.angle = s.mission.raise * rig.maxAngle;               // lever angle, degrees
+        s.mission.height = s.mission.raise * rig.maxHeight;             // drone height, cm
+        s.mission.launched = s.mission.height > 0.5;                    // "no longer touching the mat"
       },
       check: s => s.mission.launched && !touchingMarker(),
       scoreText(s) {
-        const m = s.objects[0];
-        const inSurvey = rectsOverlap(m, this.zones[0]);
-        const bonus = s.mission.launched && s.mission.flipped && inSurvey;
-        const pts = (s.mission.launched ? 20 : 0) + (bonus ? 10 : 0);
-        if (s.mission.launched && touchingMarker()) {
+        if (!s.mission.launched) {
+          return { kind: 'warn', text: '0/20 points. The drone is still on the mat. Push the red lever on the pilot stand toward the right.' };
+        }
+        if (touchingMarker()) {
           return { kind: 'warn', text: 'Back up! The robot is still touching the model, so no points count yet. Add a small back-off move to the end of your program.' };
         }
-        if (!s.mission.launched) {
-          return { kind: 'warn', text: '0/30 points. The drone is still on the mat. Push the red Scan Marker farther.' };
-        }
-        if (bonus) return { kind: 'ok', text: '🎉 30/30 points! Drone launched (+20) and the LiDAR map flipped with the marker in the survey area (+10).' };
-        return { kind: 'info', text: pts + '/30 points: drone launched (+20). For +10 more, push the marker under the LiDAR map and into the survey area.' };
+        return { kind: 'ok', text: '🎉 20/20 points! The drone is off the mat.' };
       }
     }
   ];
@@ -337,7 +333,7 @@
     speed: 75, motorSpeed: {}, moveMotors: null, swapped: false,
     cont: null, pendingBump: false, flash: null,
     bumped: false, contactUntil: 0, jitterSide: 0,
-    objects: [], mission: { launched: false, flipped: false },
+    objects: [], mission: { launched: false, raise: 0, angle: 0, height: 0 },
     trail: [], visited: new Set(), running: false,
     inBase() { return !!inBaseNow(); },
     inTarget(i) {
@@ -368,7 +364,7 @@
     sim.pendingBump = false;
     sim.bumped = false;
     sim.objects = (level.pushables || []).map(p => Object.assign({ x0: p.x, y0: p.y }, p));
-    sim.mission = { launched: false, flipped: false };
+    sim.mission = { launched: false, raise: 0, angle: 0, height: 0 };
     sim.trail = [[sim.x, sim.y]];
     sim.visited = new Set();
   }
@@ -449,10 +445,21 @@
       if (!overlapsRobot(p, nx, ny, nh)) continue;
       const toward = ddx * (p.x + p.w / 2 - sim.x) + ddy * (p.y + p.h / 2 - sim.y);
       if (toward <= 0) continue;              // moving away from it: leave it alone
-      if (!objectFits(p, p.x + ddx, p.y + ddy)) return false;
-      pushes.push(p);
+      let ex = ddx, ey = ddy;
+      if (p.slide) {
+        // a block on a rail: it only moves along its axis, and only between its stops
+        const horiz = p.slide.axis === 'x';
+        if (Math.abs(horiz ? ddy : ddx) > 1e-6) return false;   // can't push it sideways
+        const cur = horiz ? p.x : p.y;
+        const nxt = Math.max(p.slide.min, Math.min(p.slide.max, cur + (horiz ? ddx : ddy)));
+        if (Math.abs(nxt - cur) < 1e-9) return false;           // already at its stop
+        ex = horiz ? nxt - cur : 0;
+        ey = horiz ? 0 : nxt - cur;
+      }
+      if (!objectFits(p, p.x + ex, p.y + ey)) return false;
+      pushes.push([p, ex, ey]);
     }
-    pushes.forEach(p => { p.x += ddx; p.y += ddy; });
+    pushes.forEach(([p, ex, ey]) => { p.x += ex; p.y += ey; });
     sim.x = nx;
     sim.y = ny;
     sim.h = nh;
@@ -1054,72 +1061,69 @@
 
     // obstacles
     level.obstacles.forEach(o => {
+      if (o.hidden) return;
       ctx.fillStyle = '#6b7280';
       ctx.fillRect(o.x * S, o.y * S, o.w * S, o.h * S);
       ctx.strokeStyle = '#374151';
       ctx.lineWidth = 2;
       ctx.strokeRect(o.x * S, o.y * S, o.w * S, o.h * S);
+      if (o.label) {
+        ctx.fillStyle = '#374151';
+        ctx.font = 'bold 11px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(o.label, (o.x + o.w / 2) * S, o.y * S - 5);
+        ctx.textAlign = 'start';
+      }
     });
 
-    // mission models: survey area, LiDAR map, scan marker, drone
-    (level.zones || []).forEach(z => {
-      ctx.strokeStyle = '#2e7d32';
-      ctx.setLineDash([8, 6]);
+    // mission model: the drone lies on flat strings along the wall; its string is driven by the stand's lever
+    if (level.droneRig) {
+      const dr = level.droneRig, lv = sim.objects[0], r = sim.mission.raise || 0, up = sim.mission.launched;
+      ctx.fillStyle = '#d7ccc8';
+      ctx.fillRect(dr.x1 * S, (dr.y - dr.depth / 2) * S, (dr.x2 - dr.x1) * S, dr.depth * S);
+      ctx.strokeStyle = '#8d6e63';
       ctx.lineWidth = 2;
-      ctx.strokeRect(z.x * S, z.y * S, z.w * S, z.h * S);
+      ctx.strokeRect(dr.x1 * S, (dr.y - dr.depth / 2) * S, (dr.x2 - dr.x1) * S, dr.depth * S);
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.moveTo(dr.drone.x * S, dr.drone.y * S);
+      ctx.lineTo((lv.x + lv.w / 2) * S, (lv.y + lv.h / 2) * S);
+      ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = '#2e7d32';
-      ctx.font = 'bold 12px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(z.label, (z.x + z.w / 2) * S, (z.y + 5) * S);
-      ctx.textAlign = 'start';
-    });
-    if (level.lidarMap) {
-      const m = level.lidarMap, flipped = sim.mission.flipped;
-      ctx.fillStyle = flipped ? '#bbdefb' : '#cfd8dc';
-      ctx.fillRect(m.x * S, m.y * S, m.w * S, m.h * S);
-      ctx.strokeStyle = flipped ? '#1565c0' : '#607d8b';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(m.x * S, m.y * S, m.w * S, m.h * S);
-      ctx.fillStyle = flipped ? '#0d47a1' : '#37474f';
-      ctx.font = 'bold 12px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(flipped ? 'MAP FLIPPED ✓' : 'LiDAR MAP', (m.x + m.w / 2) * S, (m.y + m.h - 4) * S);
-      ctx.textAlign = 'start';
-    }
-    if (level.drone) {
-      const up = sim.mission.launched;
-      const dx = (level.drone.x + (up ? 6 : 0)) * S, dy = (level.drone.y - (up ? 14 : 0)) * S;
-      ctx.globalAlpha = up ? 0.65 : 1;
+      // the drone grows and throws a shadow as it lifts
+      const k = 1 + 0.6 * r, cx = dr.drone.x * S, cy = dr.drone.y * S;
+      ctx.fillStyle = 'rgba(0,0,0,' + (0.1 + 0.2 * r) + ')';
+      ctx.beginPath();
+      ctx.arc(cx + r * 3 * S, cy + r * 3 * S, 7 * S * k, 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = '#37474f';
-      ctx.fillRect(dx - 6 * S, dy - 1.5 * S, 12 * S, 3 * S);
-      ctx.fillRect(dx - 1.5 * S, dy - 6 * S, 3 * S, 12 * S);
-      [[-6, -6], [6, -6], [-6, 6], [6, 6]].forEach(([ox, oy]) => {
+      ctx.fillRect(cx - 6 * S * k, cy - 1.2 * S * k, 12 * S * k, 2.4 * S * k);
+      ctx.fillRect(cx - 1.2 * S * k, cy - 6 * S * k, 2.4 * S * k, 12 * S * k);
+      [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([ox, oy]) => {
         ctx.beginPath();
-        ctx.arc(dx + ox * S * 0.7, dy + oy * S * 0.7, 3 * S, 0, Math.PI * 2);
-        ctx.fillStyle = '#90a4ae';
+        ctx.arc(cx + ox * 4.5 * S * k, cy + oy * 4.5 * S * k, 2.8 * S * k, 0, Math.PI * 2);
+        ctx.fillStyle = up ? '#a5d6a7' : '#90a4ae';
         ctx.fill();
         ctx.strokeStyle = '#37474f';
         ctx.lineWidth = 2;
         ctx.stroke();
       });
-      ctx.globalAlpha = 1;
       ctx.fillStyle = up ? '#2e7d32' : '#37474f';
       ctx.font = 'bold 12px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(up ? 'DRONE LAUNCHED ✓' : 'DRONE', dx, dy + 12 * S);
+      ctx.fillText(up ? 'DRONE OFF THE MAT ✓' : 'DRONE', cx, (dr.drone.y - 12 * k) * S);
       ctx.textAlign = 'start';
     }
     sim.objects.forEach(o => {
       ctx.fillStyle = o.color;
       ctx.fillRect(o.x * S, o.y * S, o.w * S, o.h * S);
-      ctx.strokeStyle = '#7f1d1d';
+      ctx.strokeStyle = '#1c2333';
       ctx.lineWidth = 2;
       ctx.strokeRect(o.x * S, o.y * S, o.w * S, o.h * S);
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 10px system-ui, sans-serif';
+      ctx.font = 'bold 12px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(o.label, (o.x + o.w / 2) * S, (o.y + o.h / 2) * S + 3);
+      ctx.fillText(o.label, (o.x + o.w / 2) * S, (o.y + o.h / 2) * S + 4);
       ctx.textAlign = 'start';
     });
 
